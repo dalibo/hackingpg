@@ -1,0 +1,7 @@
+CREATE EXTENSION monextension;
+SELECT incremente(10);
+ incremente 
+------------
+         11
+(1 row)
+
