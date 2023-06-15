@@ -9,5 +9,11 @@ Datum
 incremente(PG_FUNCTION_ARGS)
 {
   int32   valeur = PG_GETARG_INT32(0);
+
+  if (valeur == PG_INT32_MAX)
+  {
+    elog(ERROR, "valeur maximale dépassée après incrément");
+  }
+
   PG_RETURN_INT32(valeur + 1);
 }

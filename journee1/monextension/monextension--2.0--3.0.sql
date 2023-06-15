@@ -3,4 +3,5 @@
 CREATE OR REPLACE FUNCTION incremente(int)
 RETURNS int
 AS '$libdir/monextension', 'incremente'
+STRICT
 LANGUAGE C;
