@@ -11,8 +11,28 @@
 /* module declaration */
 PG_MODULE_MAGIC;
 
+/* structure definitions */
+typedef enum CompressionMethods
+{
+  UNCOMPRESSED,
+  BZIP2,
+  ZLIB,
+  XZ,
+  ZSTD
+} CompressionMethod;
+
+static const struct config_enum_entry compression_methods[] = {
+  {"uncompressed", UNCOMPRESSED, false},
+  {"bzip2", BZIP2, false},
+  {"zlib", ZLIB, false},
+  {"xz", XZ, false},
+  {"zstd", ZSTD, false},
+  {NULL, 0, false}
+};
+
 /* variable definitions */
 static char *archive_directory = NULL;
+static int   compression_method = ZLIB;
 
 /* function definitions */
 void        _PG_init(void);
@@ -31,6 +51,16 @@ _PG_init(void)
     NULL,
     &archive_directory,
     "",
+    PGC_SIGHUP,
+    0,
+    NULL, NULL, NULL);
+
+  DefineCustomEnumVariable("zip_archive.compression_method",
+    "Méthode utilisée pour la compression.",
+    NULL,
+    &compression_method,
+    ZLIB,
+    compression_methods,
     PGC_SIGHUP,
     0,
     NULL, NULL, NULL);
@@ -58,6 +88,8 @@ zip_archive_file(const char *file, const char *path)
   zip_t        *ziparchive;
   zip_source_t *zipsource;
   int           error;
+  int           index;
+  int           compression;
 
   elog(LOG, "archiving \"%s\"", file);
 
@@ -72,7 +104,28 @@ zip_archive_file(const char *file, const char *path)
 
   ziparchive = zip_open(destination, ZIP_CREATE, &error);
   zipsource = zip_source_file(ziparchive, path, 0, 0);
-  zip_file_add(ziparchive, file, zipsource, ZIP_FL_ENC_GUESS);
+  index = zip_file_add(ziparchive, file, zipsource, ZIP_FL_ENC_GUESS);
+
+  switch(compression_method)
+  {
+    case UNCOMPRESSED:
+      compression = ZIP_CM_STORE;
+      break;
+    case BZIP2:
+      compression = ZIP_CM_BZIP2;
+      break;
+    case ZLIB:
+      compression = ZIP_CM_DEFLATE;
+      break;
+    case XZ:
+      compression = ZIP_CM_XZ;
+      break;
+    case ZSTD:
+      compression = ZIP_CM_ZSTD;
+      break;
+  }
+  zip_set_file_compression(ziparchive, index, compression, 1);
+
   zip_close(ziparchive);
 
   elog(LOG, "\"%s\" is archived!", file);
