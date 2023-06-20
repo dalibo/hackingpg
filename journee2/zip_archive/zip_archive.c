@@ -26,8 +26,18 @@ _PG_archive_module_init(ArchiveModuleCallbacks *cb)
 static bool
 zip_archive_file(const char *file, const char *path)
 {
-  elog(LOG, "file is \"%s\"", file);
-  elog(LOG, "path is \"%s\"", path);
+  zip_t        *ziparchive;
+  zip_source_t *zipsource;
+  int           error;
+
+  elog(LOG, "archiving \"%s\"", file);
+
+  ziparchive = zip_open("/tmp/test.zip", ZIP_CREATE, &error);
+  zipsource = zip_source_file(ziparchive, path, 0, 0);
+  zip_file_add(ziparchive, file, zipsource, ZIP_FL_ENC_GUESS);
+  zip_close(ziparchive);
+
+  elog(LOG, "\"%s\" is archived!", file);
 
   return true;
 }
