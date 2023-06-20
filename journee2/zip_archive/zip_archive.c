@@ -4,6 +4,8 @@
 #include "utils/builtins.h"
 #include "postmaster/pgarch.h"
 #include "utils/guc.h"
+#include "funcapi.h"
+#include "utils/timestamp.h"
 
 /* libzip header */
 #include <zip.h>
@@ -40,6 +42,7 @@ void        _PG_archive_module_init(ArchiveModuleCallbacks *cb);
 static bool zip_archive_configured(void);
 static bool zip_archive_file(const char *file, const char *path);
 PG_FUNCTION_INFO_V1(get_libzip_version);
+PG_FUNCTION_INFO_V1(get_archive_stats);
 
 /* function code */
 
@@ -142,4 +145,76 @@ Datum
 get_libzip_version(PG_FUNCTION_ARGS)
 {
   PG_RETURN_TEXT_P(cstring_to_text(zip_libzip_version()));
+}
+
+Datum
+get_archive_stats(PG_FUNCTION_ARGS)
+{
+  TupleDesc       tupdesc;
+  Datum           values[5];
+  bool            nulls[5];
+  HeapTuple       tuple;
+  Datum           result;
+  char            destination[MAXPGPATH];
+  zip_t          *ziparchive;
+  int             error;
+  int             entries_count;
+  struct zip_stat zipstat;
+
+  if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+    ereport(ERROR,
+        (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+         errmsg("function returning record called in context that cannot accept type record")));
+
+  if (cluster_name != NULL && cluster_name[0] != '\0')
+  {
+    snprintf(destination, MAXPGPATH, "%s/%s.zip", archive_directory, cluster_name);
+  }
+  else
+  {
+    snprintf(destination, MAXPGPATH, "%s/%s.zip", archive_directory, "zip_archive");
+  }
+
+  ziparchive = zip_open(destination, ZIP_CREATE, &error);
+  if (!ziparchive)
+  {
+    zip_error_t ziperror;
+    zip_error_init_with_code(&ziperror, error);
+    elog(ERROR, "cannot open zip archive '%s': %s\n", destination, zip_error_strerror(&ziperror));
+    // ne va pas être exécuté
+    zip_error_fini(&ziperror);
+  }
+
+  entries_count = zip_get_num_entries(ziparchive, 0);
+
+  values[0] = Int32GetDatum(entries_count);
+  nulls[0] = false;
+
+  values[1] = CStringGetTextDatum(zip_get_name(ziparchive, 0, ZIP_FL_ENC_GUESS));
+  nulls[1] = false;
+
+  nulls[2] = entries_count < 0;
+  if (!nulls[2])
+  {
+    values[2] = CStringGetTextDatum(zip_get_name(ziparchive, entries_count-1, ZIP_FL_ENC_GUESS));
+  }
+
+  zip_stat_index(ziparchive, 0, 0, &zipstat);
+  nulls[3] = !(zipstat.valid && ZIP_STAT_MTIME);
+  if (!nulls[3])
+  {
+    values[3] = TimestampTzGetDatum(time_t_to_timestamptz(zipstat.mtime));
+  }
+
+  zip_stat_index(ziparchive, entries_count-1, 0, &zipstat);
+  nulls[4] = !(zipstat.valid && ZIP_STAT_MTIME);
+  if (!nulls[4])
+  {
+    values[4] = TimestampTzGetDatum(time_t_to_timestamptz(zipstat.mtime));
+  }
+
+  tuple = heap_form_tuple(tupdesc, values, nulls);
+  result = HeapTupleGetDatum(tuple);
+
+  PG_RETURN_DATUM(result);
 }
