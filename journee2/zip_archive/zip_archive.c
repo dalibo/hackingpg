@@ -3,6 +3,9 @@
 #include "fmgr.h"
 #include "utils/builtins.h"
 
+/* libzip header */
+#include <zip.h>
+
 /* module declaration */
 PG_MODULE_MAGIC;
 
@@ -18,5 +21,5 @@ PG_FUNCTION_INFO_V1(get_libzip_version);
 Datum
 get_libzip_version(PG_FUNCTION_ARGS)
 {
-  PG_RETURN_TEXT_P(cstring_to_text("texte de test"));
+  PG_RETURN_TEXT_P(cstring_to_text(zip_libzip_version()));
 }
