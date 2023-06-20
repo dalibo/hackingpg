@@ -32,6 +32,12 @@ static const struct config_enum_entry compression_methods[] = {
   {NULL, 0, false}
 };
 
+typedef struct
+{
+  TupleDesc  tupdesc;
+  zip_t     *ziparchive;
+} ZipArchiveContext;
+
 /* variable definitions */
 static char *archive_directory = NULL;
 static int   compression_method = ZLIB;
@@ -43,6 +49,7 @@ static bool zip_archive_configured(void);
 static bool zip_archive_file(const char *file, const char *path);
 PG_FUNCTION_INFO_V1(get_libzip_version);
 PG_FUNCTION_INFO_V1(get_archive_stats);
+PG_FUNCTION_INFO_V1(get_archived_wals);
 
 /* function code */
 
@@ -218,3 +225,155 @@ get_archive_stats(PG_FUNCTION_ARGS)
 
   PG_RETURN_DATUM(result);
 }
+
+Datum
+get_archived_wals(PG_FUNCTION_ARGS)
+{
+  FuncCallContext   *funcctx;
+  MemoryContext      oldcontext;
+  ZipArchiveContext *fctx;
+  int                call_cntr;
+  int                max_calls;
+  char               destination[MAXPGPATH];
+  int                error;
+  struct zip_stat    zipstat;
+
+  if (SRF_IS_FIRSTCALL())
+  {
+    TupleDesc tupdesc;
+
+    /* create a function context for cross-call persistence */
+    funcctx = SRF_FIRSTCALL_INIT();
+
+    /*
+     * Switch to memory context appropriate for multiple function calls
+     */
+    oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+    /* Create a user function context for cross-call persistence */
+    fctx = (ZipArchiveContext *) palloc(sizeof(ZipArchiveContext));
+
+    /* Construct tuple descriptor */
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+      ereport(ERROR,
+          (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+           errmsg("function returning record called in context that cannot accept type record")));
+    fctx->tupdesc = BlessTupleDesc(tupdesc);
+
+    if (cluster_name != NULL && cluster_name[0] != '\0')
+    {
+      snprintf(destination, MAXPGPATH, "%s/%s.zip", archive_directory, cluster_name);
+    }
+    else
+    {
+      snprintf(destination, MAXPGPATH, "%s/%s.zip", archive_directory, "zip_archive");
+    }
+
+    fctx->ziparchive = zip_open(destination, ZIP_CREATE, &error);
+    if (!(fctx->ziparchive))
+    {
+      zip_error_t ziperror;
+      zip_error_init_with_code(&ziperror, error);
+      elog(ERROR, "cannot open zip archive '%s': %s\n", destination, zip_error_strerror(&ziperror));
+      // ne va pas être exécuté
+      zip_error_fini(&ziperror);
+    }
+
+    /* Set max_calls as a count of extensions in certificate */
+    max_calls = zip_get_num_entries(fctx->ziparchive, 0);
+
+    if (max_calls > 0)
+    {
+      /* got results, keep track of them */
+      funcctx->max_calls = max_calls;
+      funcctx->user_fctx = fctx;
+    }
+    else
+    {
+      /* fast track when no results */
+      MemoryContextSwitchTo(oldcontext);
+      SRF_RETURN_DONE(funcctx);
+    }
+
+    MemoryContextSwitchTo(oldcontext);
+  }
+
+  /* stuff done on every call of the function */
+  funcctx = SRF_PERCALL_SETUP();
+
+  /*
+   * Initialize per-call variables.
+   */
+  call_cntr = funcctx->call_cntr;
+  max_calls = funcctx->max_calls;
+  fctx = funcctx->user_fctx;
+
+  /* do while there are more left to send */
+  if (call_cntr < max_calls)
+  {
+    Datum   values[8];
+    bool    nulls[8];
+    HeapTuple tuple;
+    Datum   result;
+
+    zip_stat_index(fctx->ziparchive, call_cntr, 0, &zipstat);
+
+    nulls[0] = !(zipstat.valid && ZIP_STAT_INDEX);
+    if (!nulls[0])
+    {
+      values[0] = Int64GetDatum(zipstat.index);
+    }
+
+    nulls[1] = !(zipstat.valid && ZIP_STAT_NAME);
+    if (!nulls[1])
+    {
+      values[1] = CStringGetTextDatum(zipstat.name);
+    }
+
+    nulls[2] = !(zipstat.valid && ZIP_STAT_SIZE);
+    if (!nulls[2])
+    {
+      values[2] = Int64GetDatum(zipstat.size);
+    }
+
+    nulls[3] = !(zipstat.valid && ZIP_STAT_COMP_SIZE);
+    if (!nulls[3])
+    {
+      values[3] = Int64GetDatum(zipstat.comp_size);
+    }
+
+    nulls[4] = !(zipstat.valid && ZIP_STAT_MTIME);
+    if (!nulls[4])
+    {
+      values[4] = TimestampTzGetDatum(time_t_to_timestamptz(zipstat.mtime));
+    }
+
+    nulls[5] = !(zipstat.valid && ZIP_STAT_CRC);
+    if (!nulls[5])
+    {
+      values[5] = Int32GetDatum(zipstat.crc);
+    }
+
+    nulls[6] = !(zipstat.valid && ZIP_STAT_COMP_METHOD);
+    if (!nulls[6])
+    {
+      values[6] = Int16GetDatum(zipstat.comp_method);
+    }
+
+    nulls[7] = !(zipstat.valid && ZIP_STAT_ENCRYPTION_METHOD);
+    if (!nulls[7])
+    {
+      values[7] = Int16GetDatum(zipstat.encryption_method);
+    }
+
+    /* Build tuple */
+    tuple = heap_form_tuple(fctx->tupdesc, values, nulls);
+    result = HeapTupleGetDatum(tuple);
+
+    SRF_RETURN_NEXT(funcctx, result);
+  }
+
+  /* All done */
+  SRF_RETURN_DONE(funcctx);
+}
+

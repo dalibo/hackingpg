@@ -13,3 +13,15 @@ CREATE OR REPLACE FUNCTION get_archive_stats(
   OUT last_wal_mtime timestamptz)
 AS '$libdir/zip_archive', 'get_archive_stats'
 LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION get_archived_wals(OUT index int8,
+  OUT name text,
+  OUT uncompressed_size int8,
+  OUT compressed_size int8,
+  OUT modification_time timestamptz,
+  OUT crc int4,
+  OUT compression_method int2,
+  OUT encrytion_method int2)
+RETURNS SETOF record
+AS '$libdir/zip_archive', 'get_archived_wals'
+LANGUAGE C;
