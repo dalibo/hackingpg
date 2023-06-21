@@ -199,7 +199,9 @@ zip_archive_file(const char *file, const char *path)
   error = zip_set_file_compression(ziparchive, index, compression, 1);
   if (error)
   {
-    elog(ERROR, "cannot set compression method '%d': %s\n", compression, zip_strerror(ziparchive));
+    elog(ERROR, "cannot set compression method '%s': %s\n",
+      (compression_methods[compression_method]).name,
+      zip_strerror(ziparchive));
   }
 
   error = zip_close(ziparchive);
@@ -386,6 +388,7 @@ get_archived_wals(PG_FUNCTION_ARGS)
     bool      nulls[8];
     HeapTuple tuple;
     Datum     result;
+    int       compression;
 
     /* get file stats in ZIP archive */
     zip_stat_index(fctx->ziparchive, call_cntr, 0, &zipstat);
@@ -436,7 +439,25 @@ get_archived_wals(PG_FUNCTION_ARGS)
     nulls[6] = !(zipstat.valid && ZIP_STAT_COMP_METHOD);
     if (!nulls[6])
     {
-      values[6] = Int16GetDatum(zipstat.comp_method);
+      switch(zipstat.comp_method)
+      {
+        case ZIP_CM_STORE:
+          compression = UNCOMPRESSED;
+          break;
+        case ZIP_CM_BZIP2:
+          compression = BZIP2;
+          break;
+        case ZIP_CM_DEFLATE:
+          compression = ZLIB;
+          break;
+        case ZIP_CM_XZ:
+          compression = XZ;
+          break;
+        case ZIP_CM_ZSTD:
+          compression = ZSTD;
+          break;
+      }
+      values[6] = CStringGetTextDatum((compression_methods[compression]).name);
     }
 
     /* column 8 is WAL encryption method */

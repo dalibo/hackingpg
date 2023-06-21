@@ -20,7 +20,7 @@ CREATE OR REPLACE FUNCTION get_archived_wals(OUT index int8,
   OUT compressed_size int8,
   OUT modification_time timestamptz,
   OUT crc int4,
-  OUT compression_method int2,
+  OUT compression_method text,
   OUT encrytion_method int2)
 RETURNS SETOF record
 AS '$libdir/zip_archive', 'get_archived_wals'
