@@ -244,7 +244,7 @@ get_archive_stats(PG_FUNCTION_ARGS)
   Datum           result;
   zip_t          *ziparchive;
   int             error;
-  int             entries_count;
+  zip_int64_t     entries_count;
   struct zip_stat zipstat;
 
   /* construct tuple descriptor */
@@ -268,7 +268,7 @@ get_archive_stats(PG_FUNCTION_ARGS)
   entries_count = zip_get_num_entries(ziparchive, 0);
 
   /* column 1 is number of files */
-  values[0] = Int32GetDatum(entries_count);
+  values[0] = Int64GetDatum(entries_count);
   nulls[0] = false;
 
   /* column 2 is first WAL file name */

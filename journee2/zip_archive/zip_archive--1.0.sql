@@ -6,7 +6,7 @@ AS '$libdir/zip_archive', 'get_libzip_version'
 LANGUAGE C;
 
 CREATE OR REPLACE FUNCTION get_archive_stats(
-  OUT entries_count integer,
+  OUT entries_count int8,
   OUT first_wal_name text,
   OUT last_wal_name text,
   OUT first_wal_mtime timestamptz,
