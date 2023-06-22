@@ -20,7 +20,9 @@ typedef enum CompressionMethods
   BZIP2,
   ZLIB,
   XZ,
+#ifdef ZIP_CM_ZSTD
   ZSTD
+#endif
 } CompressionMethod;
 
 static const struct config_enum_entry compression_methods[] = {
@@ -28,7 +30,9 @@ static const struct config_enum_entry compression_methods[] = {
   {"bzip2", BZIP2, false},
   {"zlib", ZLIB, false},
   {"xz", XZ, false},
+#ifdef ZIP_CM_ZSTD
   {"zstd", ZSTD, false},
+#endif
   {NULL, 0, false}
 };
 
@@ -192,9 +196,11 @@ zip_archive_file(const char *file, const char *path)
     case XZ:
       compression = ZIP_CM_XZ;
       break;
+#ifdef ZIP_CM_ZSTD
     case ZSTD:
       compression = ZIP_CM_ZSTD;
       break;
+#endif
   }
   error = zip_set_file_compression(ziparchive, index, compression, 1);
   if (error)
@@ -453,9 +459,11 @@ get_archived_wals(PG_FUNCTION_ARGS)
         case ZIP_CM_XZ:
           compression = XZ;
           break;
+#ifdef ZIP_CM_ZSTD
         case ZIP_CM_ZSTD:
           compression = ZSTD;
           break;
+#endif
       }
       values[6] = CStringGetTextDatum((compression_methods[compression]).name);
     }
