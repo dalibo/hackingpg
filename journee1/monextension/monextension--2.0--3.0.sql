@@ -5,3 +5,8 @@ RETURNS int
 AS '$libdir/monextension', 'incremente'
 STRICT
 LANGUAGE C;
+
+CREATE OR REPLACE FUNCTION incremente_null(int)
+RETURNS int
+AS '$libdir/monextension', 'incremente'
+LANGUAGE C;
