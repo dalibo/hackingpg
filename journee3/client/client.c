@@ -23,6 +23,12 @@ main(int argc, char **argv)
   char     *query;
   PGresult *res;
 
+  int       nfields;
+  int       nrows;
+  int       i, j, l;
+  int      *length;
+  char     *pad;
+
   pg_logging_init(argv[0]);
   pg_logging_set_level(PG_LOG_DEBUG);
 
@@ -89,15 +95,51 @@ main(int argc, char **argv)
     }
     else
     {
-      printf("\n");
-      for (int ligne = 0 ; ligne < PQntuples(res) ; ligne++)
+      fprintf(stdout, "\n");
+
+      /* get the number of fields */
+      nrows = PQntuples(res);
+      nfields = PQnfields(res);
+
+      /* for each field, get the needed width */
+      length = (int *) pg_malloc(sizeof(int) * nfields);
+      for (j = 0; j < nfields; j++)
+        length[j] = strlen(PQfname(res, j));
+
+      for (i = 0; i < nrows; i++)
       {
-        for (int colonne = 0 ; colonne < PQnfields(res) ; colonne++)
+        for (j = 0; j < nfields; j++)
         {
-          printf("%s - ", PQgetvalue(res, ligne, colonne));
+          l = strlen(PQgetvalue(res, i, j));
+          if (l > length[j])
+            length[j] = strlen(PQgetvalue(res, i, j));
         }
-        printf("\n");
       }
+
+      /* print a header */
+      for (j = 0, l = 0; j < nfields; j++)
+      {
+        fprintf(stdout, "%*s", length[j] + 2, PQfname(res, j));
+        l += length[j] + 2;
+      }
+      fprintf(stdout, "\n");
+      pad = (char *) pg_malloc(l + 1);
+      memset(pad, '-', l);
+      pad[l] = '\0';
+      fprintf(stdout, "%s\n", pad);
+      free(pad);
+
+      /* for each row, dump the information */
+      for (i = 0; i < nrows; i++)
+      {
+        for (j = 0; j < nfields; j++)
+          fprintf(stdout, "%*s", length[j] + 2, PQgetvalue(res, i, j));
+        fprintf(stdout, "\n");
+      }
+
+      /* cleanup */
+      PQclear(res);
+      free(length);
     }
 
     PQclear(res);
