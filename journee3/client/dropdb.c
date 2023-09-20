@@ -13,6 +13,7 @@
 #include "common/logging.h"
 #include "fe_utils/connect_utils.h"
 #include "fe_utils/option_utils.h"
+#include "fe_utils/string_utils.h"
 #include "getopt_long.h"
 
 static void help(const char *progname);
@@ -22,6 +23,8 @@ main(int argc, char **argv)
 {
   const char   *progname;
   PGconn     *conn;
+  PGresult   *result;
+  PQExpBufferData sql;
   ConnParams  cparams;
   static struct option long_options[] = {
     {"host", required_argument, NULL, 'h'},
@@ -90,6 +93,8 @@ main(int argc, char **argv)
       exit(1);
   }
 
+  // Connect to the maintenance database
+
   cparams.dbname = "postgres";
   cparams.pghost = host;
   cparams.pgport = port;
@@ -98,6 +103,34 @@ main(int argc, char **argv)
   cparams.override_dbname = NULL;
 
   conn = connectMaintenanceDatabase(&cparams, progname, echo);
+
+  // Disconnect users from the to-be-dropped database
+
+  if (force)
+  {
+    initPQExpBuffer(&sql);
+
+    appendPQExpBuffer(&sql,
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='%s';",
+      fmtId(dbname));
+    if (echo)
+      printf("%s\n", sql.data);
+    result = PQexec(conn, sql.data);
+    if (PQresultStatus(result) != PGRES_TUPLES_OK)
+    {
+      pg_log_error("database removal failed: %s", PQerrorMessage(conn));
+      PQfinish(conn);
+      exit(1);
+    }
+
+    if (PQntuples(result) > 0)
+      pg_log_info("%d user%s disconnected",
+        PQntuples(result),
+        PQntuples(result) == 1 ? "":"s");
+
+    PQclear(result);
+  }
+
   PQfinish(conn);
 
   exit(0);

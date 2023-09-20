@@ -10,7 +10,7 @@ include $(PGXS)
 all: $(PROGRAMS)
 
 %: %.o $(WIN32RES)
-	$(CC) $(CFLAGS) $^ $(libpq_pgport) $(LDFLAGS) -lpgfeutils -lpgcommon -o $@$(X)
+	$(CC) $(CFLAGS) $^ $(libpq_pgport) $(LDFLAGS) -lpgfeutils -lpgcommon -lpgport -o $@$(X)
 
 client: client.o
 dropdb: dropdb.o
