@@ -69,7 +69,17 @@ main(int argc, char **argv)
 
     if (PQresultStatus(res) != PGRES_TUPLES_OK)
     {
-      pg_log_error("query failed: %s", PQerrorMessage(conn));
+      if (PQstatus(conn) != CONNECTION_OK)
+      {
+        pg_log_info("resetting connection\n");
+        PQreset(conn);
+        if (PQstatus(conn) != CONNECTION_BAD)
+          pg_log_debug("Reset successfull! (backend PID is %d)", PQbackendPID(conn));
+      }
+      else
+      {
+        pg_log_error("query failed: %s", PQerrorMessage(conn));
+      }
     }
     else
     {
