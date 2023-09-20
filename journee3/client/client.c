@@ -10,6 +10,7 @@
 // #include
 #include "libpq-fe.h"
 #include "postgres_fe.h"
+#include "common/logging.h"
 #include "common/string.h"
 
 int
@@ -19,6 +20,8 @@ main(int argc, char **argv)
   PGconn *conn;
   char   *password = NULL;
   bool    new_password;
+
+  pg_logging_init(argv[0]);
 
   do
   {
@@ -35,8 +38,7 @@ main(int argc, char **argv)
 
     if (!conn)
     {
-      fprintf(stderr, "could not connect\n");
-      return 1;
+      pg_fatal("could not connect");
     }
 
     if (PQstatus(conn) == CONNECTION_BAD &&
@@ -51,11 +53,11 @@ main(int argc, char **argv)
 
   if (PQstatus(conn) == CONNECTION_BAD)
   {
-      fprintf(stderr, "could not connect: %s\n", PQerrorMessage(conn));
+      pg_log_error("could not connect: %s", PQerrorMessage(conn));
       return 2;
   }
 
-  fprintf(stderr, "Connection successfull!\n");
+  pg_log_info("Connection successfull!");
 
   PQfinish(conn);
 
