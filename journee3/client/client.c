@@ -26,6 +26,11 @@ main(int argc, char **argv)
 
   conn = PQconnectdb(conninfo);
 
+  if (PQstatus(conn) != CONNECTION_OK)
+  {
+    fprintf(stderr, "%s", PQerrorMessage(conn));
+  }
+
   PQfinish(conn);
 
   return 0;
