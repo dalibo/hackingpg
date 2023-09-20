@@ -16,11 +16,12 @@
 int
 main(int argc, char **argv)
 {
-  char   *conninfo;
-  PGconn *conn;
-  char   *password = NULL;
-  bool    new_password;
-  PGresult   *res;
+  char     *conninfo;
+  PGconn   *conn;
+  char     *password = NULL;
+  bool      new_password;
+  char     *query;
+  PGresult *res;
 
   pg_logging_init(argv[0]);
   pg_logging_set_level(PG_LOG_DEBUG);
@@ -62,10 +63,15 @@ main(int argc, char **argv)
 
   pg_log_debug("Connection successfull! (backend PID is %d)", PQbackendPID(conn));
 
+  if (argc > 2)
+    query = argv[2];
+  else
+    query = "SELECT version()";
+
   // Trying to execute query
   while (true)
   {
-    res = PQexec(conn, "SELECT version()");
+    res = PQexec(conn, query);
 
     if (PQresultStatus(res) != PGRES_TUPLES_OK)
     {
@@ -83,7 +89,15 @@ main(int argc, char **argv)
     }
     else
     {
-      printf("PostgreSQL Release: %s\n", PQgetvalue(res, 0, 0));
+      printf("\n");
+      for (int ligne = 0 ; ligne < PQntuples(res) ; ligne++)
+      {
+        for (int colonne = 0 ; colonne < PQnfields(res) ; colonne++)
+        {
+          printf("%s - ", PQgetvalue(res, ligne, colonne));
+        }
+        printf("\n");
+      }
     }
 
     PQclear(res);
