@@ -118,7 +118,7 @@ main(int argc, char **argv)
     result = PQexec(conn, sql.data);
     if (PQresultStatus(result) != PGRES_TUPLES_OK)
     {
-      pg_log_error("database removal failed: %s", PQerrorMessage(conn));
+      pg_log_error("users termination failed: %s", PQerrorMessage(conn));
       PQfinish(conn);
       exit(1);
     }
@@ -129,7 +129,31 @@ main(int argc, char **argv)
         PQntuples(result) == 1 ? "":"s");
 
     PQclear(result);
+
+    termPQExpBuffer(&sql);
   }
+
+  // Drop database
+
+  initPQExpBuffer(&sql);
+
+  appendPQExpBuffer(&sql,
+    "DROP DATABASE %s;",
+    fmtId(dbname));
+  if (echo)
+    printf("%s\n", sql.data);
+  result = PQexec(conn, sql.data);
+  if (PQresultStatus(result) != PGRES_COMMAND_OK)
+  {
+    pg_log_error("database removal failed: %s", PQerrorMessage(conn));
+    PQfinish(conn);
+    exit(1);
+  }
+  else
+    pg_log_info("database dropped");
+  PQclear(result);
+
+  termPQExpBuffer(&sql);
 
   PQfinish(conn);
 
