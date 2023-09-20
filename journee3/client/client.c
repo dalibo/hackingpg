@@ -23,7 +23,9 @@ main(int argc, char **argv)
   PGresult   *res;
 
   pg_logging_init(argv[0]);
+  pg_logging_set_level(PG_LOG_DEBUG);
 
+  // Trying to connect
   do
   {
     if (argc > 1)
@@ -54,24 +56,30 @@ main(int argc, char **argv)
 
   if (PQstatus(conn) == CONNECTION_BAD)
   {
-      pg_log_error("could not connect: %s", PQerrorMessage(conn));
-      return 2;
+    pg_log_error("could not connect: %s", PQerrorMessage(conn));
+    return 2;
   }
 
-  pg_log_debug("Connection successfull!");
+  pg_log_debug("Connection successfull! (backend PID is %d)", PQbackendPID(conn));
 
-  res = PQexec(conn, "SELECT version()");
-
-  if (PQresultStatus(res) != PGRES_TUPLES_OK)
+  // Trying to execute query
+  while (true)
   {
-    pg_log_error("query failed: %s", PQerrorMessage(conn));
-  }
-  else
-  {
-    printf("PostgreSQL Release: %s\n", PQgetvalue(res, 0, 0));
-  }
+    res = PQexec(conn, "SELECT version()");
 
-  PQclear(res);
+    if (PQresultStatus(res) != PGRES_TUPLES_OK)
+    {
+      pg_log_error("query failed: %s", PQerrorMessage(conn));
+    }
+    else
+    {
+      printf("PostgreSQL Release: %s\n", PQgetvalue(res, 0, 0));
+    }
+
+    PQclear(res);
+
+    sleep(1);
+  }
 
   PQfinish(conn);
 
