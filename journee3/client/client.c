@@ -7,12 +7,26 @@
  *
  */
 
+// #include système
 #include <stdio.h>
+
+// #include PostgreSQL
+#include "libpq-fe.h"
 
 int
 main(int argc, char **argv)
 {
-  printf("ca marche ?\n");
+  const char *conninfo;
+  PGconn     *conn;
+
+  if (argc > 1)
+    conninfo = argv[1];
+  else
+    conninfo = "";
+
+  conn = PQconnectdb(conninfo);
+
+  PQfinish(conn);
 
   return 0;
 }
