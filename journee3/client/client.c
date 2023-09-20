@@ -20,6 +20,7 @@ main(int argc, char **argv)
   PGconn *conn;
   char   *password = NULL;
   bool    new_password;
+  PGresult   *res;
 
   pg_logging_init(argv[0]);
 
@@ -57,7 +58,20 @@ main(int argc, char **argv)
       return 2;
   }
 
-  pg_log_info("Connection successfull!");
+  pg_log_debug("Connection successfull!");
+
+  res = PQexec(conn, "SELECT version()");
+
+  if (PQresultStatus(res) != PGRES_TUPLES_OK)
+  {
+    pg_log_error("query failed: %s", PQerrorMessage(conn));
+  }
+  else
+  {
+    printf("PostgreSQL Release: %s\n", PQgetvalue(res, 0, 0));
+  }
+
+  PQclear(res);
 
   PQfinish(conn);
 
