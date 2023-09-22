@@ -10,3 +10,8 @@ d'archivage, avec une fonction renvoyant plusieurs colonnes et une fonction
 renvoyant plusieurs colonnes et lignes. Le code de cette journée se trouve dans
 le répertoire journee2 avec un tag par étape dans la construction de cette
 bibliothèque partagée / extension.
+
+La troisième journée a concerné la création d'un client pour PostgreSQL. Cela a
+permis de découvrir la libpq et ses fonctions. Le code de cette journée se
+trouve dans le répertoire journee3 avec un tag par étape dans la construction de
+deux applications clientes.
