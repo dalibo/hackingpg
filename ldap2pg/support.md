@@ -83,3 +83,23 @@ rules:
     options: LOGIN
     parents: readers
 ```
+
+- https://ldap2pg.rtfd.io/en/latest/config/
+
+
+## Étape 3
+
+``` yaml
+version: 6
+
+rules:
+- description: "Tous les groupes."
+  ldapsearch:
+    base: ou=groups,dc=bridoulou,dc=fr
+  roles:
+  - name: "{cn}"
+  - name: "{member.cn}"
+    parent: "{cn}"
+```
+
+- ldap2pg --verbose

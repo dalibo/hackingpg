@@ -1,8 +1,11 @@
 version: 6
 
+
 rules:
-- roles:
-  - name: readers
-  - name: alice
-    options: LOGIN
-    parents: readers
+- description: "Tous les groupes."
+  ldapsearch:
+    base: ou=groups,dc=bridoulou,dc=fr
+  roles:
+  - name: "{cn}"
+  - name: "{member.cn}"
+    parent: "{cn}"
