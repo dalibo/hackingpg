@@ -1,4 +1,8 @@
 version: 6
 
 rules:
-- role: alice
+- roles:
+  - name: readers
+  - name: alice
+    options: LOGIN
+    parents: readers

@@ -69,3 +69,17 @@ rules:
 - ldap2pg --verbose
 - ldap2pg --real
 - ldap2pg  # Nothing to do.
+
+
+## Étape 2
+
+``` yaml
+version: 6
+
+rules:
+- roles:
+  - name: readers
+  - name: alice
+    options: LOGIN
+    parents: readers
+```
