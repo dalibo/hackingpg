@@ -103,3 +103,29 @@ rules:
 ```
 
 - ldap2pg --verbose
+
+
+## Étape 4
+
+``` yaml
+version: 6
+
+privileges:
+  lecture:
+  - type: CONNECT
+    on: DATABASE
+  - type: USAGE
+    on: SCHEMA
+
+rules:
+- description: "Tous les groupes."
+  ldapsearch:
+    base: ou=groups,dc=bridoulou,dc=fr
+  roles:
+  - name: "{cn}"
+  - name: "{member.cn}"
+    parent: "{cn}"
+- grants:
+  - role: readers
+    privilege: lecture
+```
