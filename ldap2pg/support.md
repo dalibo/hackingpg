@@ -6,9 +6,10 @@
 - monter rapidement un annuaire OpenLDAP
 - gérer quelques rôles
 - gérer quelques privilèges
+- fichiers de l'atelier: https://github.com/dalibo/hackingpg/tree/main/ldap2pg
 
 
-## Système
+## Prérequis de l'atelier
 
 - VM
 - Bullseye
@@ -42,6 +43,7 @@ En root:
 - https://apt.dalibo.org/labs/
 - wget https://apt.dalibo.org/labs/debian-dalibo.asc
 - gpg --dearmor debian-dalibo.asc
+- mv debian-dalibo.asc.gpg /etc/apt/trusted.gpg.d/
 - echo deb http://apt.dalibo.org/labs bullseye-dalibo main > /etc/apt/sources.list.d/dalibo.list
 - apt update
 - apt install ldap2pg
@@ -52,13 +54,15 @@ En root:
 
 En utilisateur `postgres`:
 
-- export LDAPURI=ldap://localhost:389 LDAPBINDDN=cn=admin,dc=bridoulou,dc=fr LDAPPASSWORD=
+- export LDAPURI=ldap://localhost:389 LDAPBINDDN=cn=admin,dc=bridoulou,dc=fr LDAPPASSWORD=...
 - ldapwhoami -x -w "$LDAPPASSWORD"
+- psql
 
 
-## Étape 1
+## Étape 1 - le fichier
 
 ``` yaml
+# ldap2pg.yml
 version: 6
 
 rules:
@@ -69,9 +73,10 @@ rules:
 - ldap2pg --verbose
 - ldap2pg --real
 - ldap2pg  # Nothing to do.
+- `\du+`
 
 
-## Étape 2
+## Étape 2 - les rôles
 
 ``` yaml
 version: 6
@@ -87,7 +92,7 @@ rules:
 - https://ldap2pg.rtfd.io/en/latest/config/
 
 
-## Étape 3
+## Étape 3 - recherche LDAP
 
 ``` yaml
 version: 6
@@ -99,13 +104,15 @@ rules:
   roles:
   - name: "{cn}"
   - name: "{member.cn}"
-    parent: "{cn}"
+    parent:
+    - "{cn}"
+    - pg_monitor
 ```
 
 - ldap2pg --verbose
 
 
-## Étape 4
+## Étape 4 - privileges
 
 ``` yaml
 version: 6
@@ -116,7 +123,7 @@ privileges:
     on: DATABASE
   - type: USAGE
     on: SCHEMA
-
+ 
 rules:
 - description: "Tous les groupes."
   ldapsearch:
@@ -129,3 +136,5 @@ rules:
   - role: readers
     privilege: lecture
 ```
+
+- concept d'ACL : une requête d'inspection d'une colonne `*acl` dans un catalogue système associé à une requête GRANT et une requête REVOKE pour manipuler cet ACL.
