@@ -128,6 +128,21 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			get_rel_name(class_form->relrewrite) :
 			NameStr(class_form->relname)));
 
+	switch (change->action)
+	{
+		case REORDER_BUFFER_CHANGE_INSERT:
+			appendStringInfoString(ctx->out, " INSERT");
+			break;
+		case REORDER_BUFFER_CHANGE_UPDATE:
+			appendStringInfoString(ctx->out, " UPDATE");
+			break;
+		case REORDER_BUFFER_CHANGE_DELETE:
+			appendStringInfoString(ctx->out, " DELETE");
+			break;
+		default:
+			Assert(false);
+	}
+
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
 
