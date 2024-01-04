@@ -113,6 +113,7 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 {
 	AuditDecodingData *data;
 	MemoryContext old;
+	Form_pg_class class_form;
 
 	data = ctx->output_plugin_private;
 
@@ -120,7 +121,12 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 
-	appendStringInfoString(ctx->out, "yeah!");
+	class_form = RelationGetForm(relation);
+	appendStringInfoString(ctx->out,
+		quote_qualified_identifier(get_namespace_name(get_rel_namespace(RelationGetRelid(relation))),
+		class_form->relrewrite ?
+			get_rel_name(class_form->relrewrite) :
+			NameStr(class_form->relname)));
 
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
