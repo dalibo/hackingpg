@@ -24,6 +24,8 @@ main(int argc, char **argv)
   const char   *progname;
   PGconn     *conn;
   ConnParams  cparams;
+  PGresult   *result;
+  PQExpBufferData sql;
   static struct option long_options[] = {
     {"dbname", required_argument, NULL, 'd'},
     {"host", required_argument, NULL, 'h'},
@@ -109,7 +111,69 @@ main(int argc, char **argv)
 
   // Main Stuff
 
-  pg_log_info("table is %s", table);
+  pg_log_info("Auditing table \"%s\"...", table);
+
+  // Create logical slot
+  initPQExpBuffer(&sql);
+  appendPQExpBuffer(&sql,
+    "SELECT * FROM "
+    "pg_create_logical_replication_slot('audit_%d', 'plugin_audit', false, true);",
+    PQbackendPID(conn));
+  if (echo)
+    printf("%s\n", sql.data);
+  result = PQexec(conn, sql.data);
+  if (PQresultStatus(result) != PGRES_TUPLES_OK)
+  {
+    pg_log_error("create slot failed: %s", PQerrorMessage(conn));
+    PQfinish(conn);
+    exit(1);
+  }
+  PQclear(result);
+  termPQExpBuffer(&sql);
+
+  // Loop for new changes
+  initPQExpBuffer(&sql);
+  appendPQExpBuffer(&sql,
+    "SELECT * FROM "
+    "pg_logical_slot_get_changes('audit_%d', NULL, NULL);",
+    PQbackendPID(conn));
+  for (int i=1 ; i<60 ; i++)
+  {
+    if (echo)
+      printf("%s\n", sql.data);
+    result = PQexec(conn, sql.data);
+    if (PQresultStatus(result) != PGRES_TUPLES_OK)
+    {
+      pg_log_error("get changes failed: %s", PQerrorMessage(conn));
+      PQfinish(conn);
+      exit(1);
+    }
+    for (int ligne = 0 ; ligne < PQntuples(result) ; ligne++)
+    {
+      printf("%s\n", PQgetvalue(result, ligne, 2));
+    }
+    PQclear(result);
+    sleep(1);
+  }
+  termPQExpBuffer(&sql);
+
+  // Drop logical slot
+  initPQExpBuffer(&sql);
+  appendPQExpBuffer(&sql,
+    "SELECT * FROM "
+    "pg_drop_replication_slot('audit_%d');",
+    PQbackendPID(conn));
+  if (echo)
+    printf("%s\n", sql.data);
+  result = PQexec(conn, sql.data);
+  if (PQresultStatus(result) != PGRES_TUPLES_OK)
+  {
+    pg_log_error("drop slot failed: %s", PQerrorMessage(conn));
+    PQfinish(conn);
+    exit(1);
+  }
+  PQclear(result);
+  termPQExpBuffer(&sql);
 
   // Disconnect
 
