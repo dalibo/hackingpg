@@ -9,6 +9,7 @@
 
 // #include
 #include "libpq-fe.h"
+#include <signal.h>
 #include "postgres_fe.h"
 #include "common/logging.h"
 #include "fe_utils/connect_utils.h"
@@ -16,7 +17,16 @@
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
 
+static volatile int keepRunning = 1;
+
 static void help(const char *progname);
+void intHandler(int dummy);
+
+void intHandler(int dummy)
+{
+  printf("Interrupting execution...\n");
+  keepRunning = 0;
+}
 
 int
 main(int argc, char **argv)
@@ -109,6 +119,8 @@ main(int argc, char **argv)
 
   conn = connectDatabase(&cparams, progname, echo, false, false);
 
+  pqsignal(SIGINT, intHandler);
+
   // Main Stuff
 
   pg_log_info("Auditing table \"%s\"...", table);
@@ -137,7 +149,7 @@ main(int argc, char **argv)
     "SELECT * FROM "
     "pg_logical_slot_get_changes('audit_%d', NULL, NULL);",
     PQbackendPID(conn));
-  for (int i=1 ; i<60 ; i++)
+  while (keepRunning)
   {
     if (echo)
       printf("%s\n", sql.data);
