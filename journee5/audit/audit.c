@@ -162,7 +162,10 @@ main(int argc, char **argv)
     }
     for (int ligne = 0 ; ligne < PQntuples(result) ; ligne++)
     {
-      printf("%s\n", PQgetvalue(result, ligne, 2));
+      if (strstr(PQgetvalue(result, ligne, 2), table))
+      {
+        printf("%s\n", PQgetvalue(result, ligne, 2));
+      }
     }
     PQclear(result);
     sleep(1);
