@@ -1,0 +1,12 @@
+---
+- hosts: all
+  gather_facts: no
+  vars_files: commons.yml
+  tasks:
+
+    - name: Restart PostgreSQL service
+      become: true
+      ansible.builtin.systemd_service:
+        name: "{{ pgsql_service_name }}"
+        enabled: true
+        state: restarted

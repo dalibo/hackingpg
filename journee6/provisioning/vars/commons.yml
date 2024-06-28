@@ -1,0 +1,4 @@
+pgver: 16
+pgsql_service_name: "postgresql-{{ pgver }}"
+pgbin: "/usr/pgsql-{{ pgver }}/bin"
+pgdata: "/var/lib/pgsql/{{ pgver }}/data"

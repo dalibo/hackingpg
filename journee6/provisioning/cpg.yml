@@ -1,0 +1,111 @@
+---
+- hosts: all
+  gather_facts: no
+  vars_files: commons.yml
+  tasks:
+
+    # CPG MODULE
+
+    - name: Install build dependencies
+      become: true
+      tags: cpg_module
+      ansible.builtin.yum:
+        state: latest
+        enablerepo:
+          - "pgdg{{ pgver }}"
+          - crb
+        name:
+          - redhat-rpm-config
+          - "postgresql{{ pgver }}-devel"
+          - corosynclib-devel
+          - systemd-devel
+          - perl(IPC::Run)
+          - ccache
+
+    - name: Copy cpg.c source code
+      tags: cpg_build
+      ansible.builtin.copy:
+        src: ../cpg.c
+        dest: /vagrant/cpg.c
+        owner: vagrant
+        group: vagrant
+        mode: '0644'
+
+    - name: Build cpg PostgreSQL module
+      become: true
+      tags:
+        - cpg_build
+        - cpg_module
+      environment:
+        PG_CONFIG: "{{ pgbin }}/pg_config"
+      ansible.builtin.command:
+        chdir: /vagrant
+        argv:
+          - make
+          - all
+      register: build_cpg
+      changed_when: "\"Nothing to be done for 'all'\" not in build_cpg.stdout"
+
+    - name: Install cpg PostgreSQL module
+      become: true
+      tags:
+        - cpg_build
+        - cpg_module
+      when: build_cpg is changed
+      environment:
+        PG_CONFIG: "{{ pgbin }}/pg_config"
+      ansible.builtin.command:
+        chdir: /vagrant
+        argv:
+          - make
+          - install
+
+    - name: Setup CPG module in postgresql.conf
+      become: true
+      tags: cpg_module
+      ansible.builtin.blockinfile:
+        marker: "# {mark} ANSIBLE CPG BLOCK"
+        dest: "{{ pgdata }}/postgresql.conf"
+        block: |
+          shared_preload_libraries = 'cpg'
+          include_if_exists = 'cpg.auto.conf'
+          cpg.interval = 10
+          cpg.service = 'postgresql-16.service'
+          cpg.is_user_service = false
+
+    - name: Setup polkit rule
+      tags: cpg_module
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/polkit-1/rules.d/10-postgresql-16.service.rules
+        content: |
+          /* We could restrict on service action as well using eg.:
+           *   action.lookup("verb") == "restart"
+           * Or only on the user using:
+           *   subject.user == "postgres"
+           *
+           * Doc and examples:
+           *   https://cockpit-project.org/guide/latest/feature-systemd
+           */
+          polkit.addRule(function(action, subject) {
+              if (action.id == "org.freedesktop.systemd1.manage-units" &&
+                  action.lookup("unit") == "postgresql-16.service" &&
+                  subject.isInGroup("postgres")) {
+                  
+                  return polkit.Result.YES;
+              }
+          });
+        owner: root
+        group: root
+        mode: 0644
+
+    # Restart PostgreSQL
+    - name: Restart PostgreSQL service
+      become: true
+      tags:
+        - cpg_build
+        - cpg_module
+      ansible.builtin.systemd_service:
+        name: "{{ pgsql_service_name }}"
+        enabled: true
+        state: restarted

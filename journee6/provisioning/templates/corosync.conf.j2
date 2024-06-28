@@ -1,0 +1,29 @@
+totem {
+    version: 2
+    cluster_name: pgc
+    crypto_cipher: none
+    crypto_hash: none
+}
+logging {
+    to_logfile: no
+    logfile: /var/log/cluster/corosync.log
+    to_syslog: yes
+    debug: off
+    timestamp: hires
+    logger_subsys {
+        subsys: QUORUM
+        debug: off
+    }
+}
+quorum {
+    provider: corosync_votequorum
+}
+nodelist {
+{% for node in groups['all'] | sort %}
+    node {
+            nodeid: {{ loop.index }}
+            name: {{ node }}
+            ring0_addr: {{ cs_hosts[node] }}
+    }
+{% endfor %}
+}

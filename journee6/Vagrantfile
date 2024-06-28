@@ -1,0 +1,101 @@
+require 'ipaddr'
+require 'yaml'
+require 'getoptlong'
+
+ENV["LANG"]   = "en_US.UTF-8"
+ENV["LC_ALL"] = "en_US.UTF-8"
+
+boxname      = 'generic/rocky9'  # vagrant box to use
+vm_prefix    = 'hpg5_'           # VM prefix in libvrit
+nodes        = 's1', 's2', 's3'
+pgver        = 16
+ansible_tags = nil
+base_ip      = '10.20.30.50' # vIP for VM are incremented from here
+
+opts = GetoptLong.new(
+  # to list known tags: ansible-playbook --list-tags provisioning/Build.yml
+  [ '--ansible-tags', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--pgver', GetoptLong::REQUIRED_ARGUMENT ],
+)
+
+opts.ordering=( GetoptLong::REQUIRE_ORDER )
+
+opts.each do |opt, arg|
+  case opt
+    when '--ansible-tags'
+      if ansible_tags.nil?
+        ansible_tags = []
+      end
+      ansible_tags.push(arg)
+    when '--pgver'
+      pgver = arg
+  end
+end
+
+Vagrant.configure(2) do |config|
+
+  node_ip    = IPAddr.new(base_ip)
+  nodes_ips  = {}
+
+  # https://vagrantcloud.com/search.
+  config.vm.box = boxname
+
+  # hardware and host settings
+  config.vm.provider 'libvirt' do |lv|
+    lv.cpus = 2
+    lv.memory = 1024
+    lv.default_prefix = vm_prefix
+    lv.qemu_use_session = false
+  end
+
+  # sync the root of sources
+  config.vm.synced_folder ".", "/vagrant", type: 'rsync'
+
+  nodes.each do |node|
+    node_ip = node_ip.succ
+    nodes_ips[node] = node_ip.to_s
+
+    config.vm.define node do |conf|
+      conf.vm.hostname = node
+      conf.vm.network :private_network,
+                      :ip => nodes_ips[node]
+    end
+  end
+
+  config.vm.define nodes.first, primary: true do |conf|
+
+    conf.vm.provision "build", type: "ansible"  do |a|
+      a.tags = ansible_tags
+      a.limit = "all"
+      a.playbook = "provisioning/Build.yml"
+      a.groups = {
+        "primary"   => [ nodes.first ],
+        "standbies" => nodes[1..-1]
+      }
+      a.extra_vars = {
+        "pgver" => pgver,
+        "cs_hosts" => nodes_ips
+      }
+    end
+
+    conf.vm.provision "restart", type: "ansible", run: "never" do |a|
+      a.tags = ansible_tags
+      a.limit = "all"
+      a.playbook = "provisioning/Restart-pgsql.yml"
+      a.extra_vars = {
+        pgver: pgver
+      }
+    end
+
+    conf.vm.provision "cpg", type: "ansible", run: "never" do |a|
+      a.tags = ansible_tags
+      a.limit = "all"
+      a.playbook = "provisioning/cpg.yml"
+      a.extra_vars = {
+        pgver: pgver
+      }
+    end
+
+  end
+
+end
