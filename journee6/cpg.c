@@ -22,6 +22,8 @@
 #include "fmgr.h"					// needed for PG_MODULE_MAGIC
 #include "storage/latch.h"			// for *Latch()
 #include "utils/wait_event.h"		// for *Latch()
+#include "utils/guc.h"				// for GUC
+#include "postmaster/interrupt.h"	// for HandleMainLoopInterrupts() & co
 
 /* Required in all loadable module */
 PG_MODULE_MAGIC;
@@ -31,6 +33,13 @@ PG_MODULE_MAGIC;
  * external code using "PGDLLEXPORT"
  */
 PGDLLEXPORT void cpg_main(Datum main_arg);
+
+/*
+ * Global variables
+ */
+
+/* Maximum interval between bgworker wakeups */
+static int interval;
 
 /*
  * Functions
@@ -65,12 +74,47 @@ cpg_main(Datum main_arg)
 	 */
 
 	/*
-	 * Install signal handler to leave gracefully on shutdown
+	 * Install signal handlers
 	 */
+	/* Leave gracefully on shutdown */
 	pqsignal(SIGTERM, cpg_sigterm);
+	/* Core facility to handle config reload */
+	pqsignal(SIGHUP, SignalHandlerForConfigReload);
 
 	/* We can now unblock signals */
 	BackgroundWorkerUnblockSignals();
+
+	/*
+	 * GUC declarations
+	 */
+
+	/* interval */
+	DefineCustomIntVariable("cpg.interval",	// name
+							"Defines the maximal interval in seconds between "
+							"wakeups",		// description
+							NULL,			// long description
+							&interval,		// variable to set
+							10,				// default value
+							1,				// min value
+							INT_MAX / 1000,	// max value
+							PGC_SIGHUP,		// context
+							GUC_UNIT_S,		// flags
+							NULL,			// check hook
+							NULL,			// assign hook
+							NULL);			// show hook
+
+	/*
+	 * Lock namespace "cpg". Forbid creating any other GUC after here. Useful
+	 * to remove unknown or mispelled GUCs from this domain.
+	 */
+#if PG_VERSION_NUM >= 150000
+	MarkGUCPrefixReserved("cpg");
+#else
+	/* Note that this still exists in v15+ as a macro calling
+	 * MarkGUCPrefixReserved */
+	EmitWarningsOnPlaceholders("cpg");
+#endif
+
 	elog(LOG, "[cpg] Starting…");
 
 	/* Event loop */
@@ -80,10 +124,14 @@ cpg_main(Datum main_arg)
 
 		elog(LOG, "[cpg] Hi");
 
+		/* Facility from core. checks if some smiple and common interrupts,
+		 * including SIGHUP to reload conf files, and process them. */
+		HandleMainLoopInterrupts();
+
 		/* Wait for an event or timeout */
 		WaitLatch(MyLatch,
 				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-				  10*1000, /* ten seconds converted to milliseconds */
+				  interval*1000, /* convert to milliseconds */
 				  PG_WAIT_EXTENSION);
 		ResetLatch(MyLatch);
 	}
