@@ -15,6 +15,7 @@
  */
 
 #include <limits.h>					// INT_MAX
+#include <corosync/cpg.h>			// corosync funcs
 
 #include "postgres.h"				// definitions useful for PostgreSQL procs
 #include "postmaster/bgworker.h"	// for a bgworker
@@ -26,6 +27,8 @@
 #include "postmaster/interrupt.h"	// for HandleMainLoopInterrupts() & co
 #include "utils/ps_status.h"		// rename process
 #include "access/xlog.h"			// for RecoveryInProgress()
+
+#define CPG_GROUP_NAME "pgsql_group"
 
 /* Required in all loadable module */
 PG_MODULE_MAGIC;
@@ -87,6 +90,14 @@ cpg_sigterm(SIGNAL_ARGS)
 void
 cpg_main(Datum main_arg)
 {
+	cs_error_t rc;
+	/* Structure holding the CPG setup and callback */
+	cpg_model_v1_data_t model_data;
+	/* Group name in corosync internal format */
+	struct cpg_name cpg_group;
+	/* Structure holding the group handle */
+	cpg_handle_t gh;
+
 	/*
 	 * By default, signals are blocked when the background worker starts.
 	 * This allows to set up some signal handlers during the worker
@@ -141,6 +152,36 @@ cpg_main(Datum main_arg)
 	in_recovery = RecoveryInProgress();
 
 	update_ps_display();
+
+	/*
+	 * Corosync initialization and membership
+	 */
+
+	/* Corosync callbacks setup */
+	model_data.flags = CPG_MODEL_V1_DELIVER_INITIAL_TOTEM_CONF;
+	model_data.cpg_deliver_fn = NULL; /* TODO */
+	model_data.cpg_confchg_fn = NULL; /* TODO */
+	/* We choose to not implement the totem callback as it is not relevent */
+	model_data.cpg_totem_confchg_fn = NULL;
+
+	/* Initialize the connection */
+	rc = cpg_model_initialize(&gh, CPG_MODEL_V1,
+							  (cpg_model_data_t *) &model_data, NULL);
+	if (rc != CS_OK)
+		elog(FATAL, "[cpg] could not init the cpg handle: %d", rc);
+
+	/* Initialize the group name structure */
+	strncpy(cpg_group.value, CPG_GROUP_NAME, CPG_MAX_NAME_LENGTH);
+	cpg_group.length = strlen(CPG_GROUP_NAME);
+
+	/* Try to join the Close Process Group! */
+	rc = cpg_join(gh, &cpg_group);
+	if (rc == CS_OK)
+		elog(LOG, "[cpg] joined group '" CPG_GROUP_NAME);
+	else if (rc == CS_ERR_INVALID_PARAM)
+		elog(FATAL, "[cpg] the handle is already joined to a group");
+	else
+		elog(FATAL, "[cpg] could not join the close process group: %d", rc);
 
 	/* Event loop */
 	for (;;)
