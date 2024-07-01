@@ -33,6 +33,23 @@ PG_MODULE_MAGIC;
 PGDLLEXPORT void cpg_main(Datum main_arg);
 
 /*
+ * Functions
+ */
+
+/*
+ * Signal handler for SIGTERM
+ *
+ * Say good bye!
+ */
+static void
+cpg_sigterm(SIGNAL_ARGS)
+{
+	elog(LOG, "[cpg] …and leaving");
+
+	exit(0);
+}
+
+/*
  * The bgworker main function.
  *
  * This is called from the bgworker backend freshly forked and setup by
@@ -41,6 +58,19 @@ PGDLLEXPORT void cpg_main(Datum main_arg);
 void
 cpg_main(Datum main_arg)
 {
+	/*
+	 * By default, signals are blocked when the background worker starts.
+	 * This allows to set up some signal handlers during the worker
+	 * startup.
+	 */
+
+	/*
+	 * Install signal handler to leave gracefully on shutdown
+	 */
+	pqsignal(SIGTERM, cpg_sigterm);
+
+	/* We can now unblock signals */
+	BackgroundWorkerUnblockSignals();
 	elog(LOG, "[cpg] Starting…");
 
 	/* Event loop */
@@ -58,9 +88,9 @@ cpg_main(Datum main_arg)
 		ResetLatch(MyLatch);
 	}
 
-	elog(LOG, "[cpg] …and leaving.");
+	elog(LOG, "[cpg] oops, the event loop broke");
 
-	exit(0);
+	exit(1);
 }
 
 /*
