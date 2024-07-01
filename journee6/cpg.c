@@ -20,6 +20,8 @@
 #include "postmaster/bgworker.h"	// for a bgworker
 #include "miscadmin.h"				// various variables, macros and funcs
 #include "fmgr.h"					// needed for PG_MODULE_MAGIC
+#include "storage/latch.h"			// for *Latch()
+#include "utils/wait_event.h"		// for *Latch()
 
 /* Required in all loadable module */
 PG_MODULE_MAGIC;
@@ -40,6 +42,22 @@ void
 cpg_main(Datum main_arg)
 {
 	elog(LOG, "[cpg] Starting…");
+
+	/* Event loop */
+	for (;;)
+	{
+		CHECK_FOR_INTERRUPTS();
+
+		elog(LOG, "[cpg] Hi");
+
+		/* Wait for an event or timeout */
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  10*1000, /* ten seconds converted to milliseconds */
+				  PG_WAIT_EXTENSION);
+		ResetLatch(MyLatch);
+	}
+
 	elog(LOG, "[cpg] …and leaving.");
 
 	exit(0);
