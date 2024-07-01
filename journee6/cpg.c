@@ -58,6 +58,12 @@ static uint32_t MyNodeID;
 static char hostname[HOST_NAME_MAX];
 /* Known primary */
 static char current_primary[HOST_NAME_MAX];
+/* Structure holding the group handle */
+static cpg_handle_t gh;
+/* Group name in corosync internal format */
+static struct cpg_name cpg_group;
+/* flag shutdown set by signal handlers */
+static volatile sig_atomic_t pending_shutdown = false;
 
 /*
  * Functions
@@ -120,14 +126,15 @@ update_ps_display()
 /*
  * Signal handler for SIGTERM
  *
- * Say good bye!
+ * Say good bye and leave the group gracefuly.
  */
 static void
 cpg_sigterm(SIGNAL_ARGS)
 {
-	elog(LOG, "[cpg] …and leaving");
-
-	exit(0);
+	elog(LOG, "[cpg] pending shutdown…");
+	pending_shutdown = true;
+	/* Trigger the latch to wake up the event loop immediately*/
+	SetLatch(MyLatch);
 }
 
 /*
@@ -153,6 +160,40 @@ send_msg(cpg_handle_t gh, char *data, int len)
 		elog(DEBUG1, "[cpg] message sent: %s", data);
 	else
 		elog(FATAL, "[cpg] could not send message: %d", rc);
+}
+
+/*
+ * Leave the group gracefuly, reset primary_conninfo and shutdown.
+ */
+static void
+cpg_shutdown()
+{
+	cs_error_t rc;
+
+	/* Reset shutdown signal */
+	pending_shutdown = false;
+
+	elog(LOG, "[cpg] …and leaving");
+
+	/* Leave the closed group */
+	rc = cpg_leave(gh, &cpg_group);
+	if ( rc == CS_OK )
+		elog(LOG, "[cpg] left group '" CPG_GROUP_NAME "'");
+	else
+		elog(FATAL, "[cpg] leaving group '" CPG_GROUP_NAME "' failed: %d", rc);
+
+	/* Deallocate the group handler */
+	rc = cpg_finalize(gh);
+	if ( rc == CS_OK )
+		elog(DEBUG1, "[cpg] handle finalized");
+	else
+		elog(FATAL, "[cpg] finalizing handle failed: %d", rc);
+
+	/* Remove any primary_conninfo setting */
+	set_primary_conninfo("");
+
+	/* Shutdown */
+	exit(0);
 }
 
 /*
@@ -307,10 +348,6 @@ cpg_main(Datum main_arg)
 	cs_error_t rc;
 	/* Structure holding the CPG setup and callback */
 	cpg_model_v1_data_t model_data;
-	/* Group name in corosync internal format */
-	struct cpg_name cpg_group;
-	/* Structure holding the group handle */
-	cpg_handle_t gh;
 	int32_t cpg_fd;
 
 	/*
@@ -454,6 +491,9 @@ cpg_main(Datum main_arg)
 		/* Facility from core. checks if some smiple and common interrupts,
 		 * including SIGHUP to reload conf files, and process them. */
 		HandleMainLoopInterrupts();
+
+		if (pending_shutdown)
+			cpg_shutdown();
 
 		/* Wait for an event or timeout */
 		WaitLatchOrSocket(MyLatch,
