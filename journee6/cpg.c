@@ -1,8 +1,11 @@
 /*-------------------------------------------------------------------------
  * cpg.c: A Corosync background worker for PostgreSQL
  *
- * Its only goal is to detect which node is the primary and dynamically
- * set the primary conninfo in accordance.
+ * Its goal is to detect which node is the primary and dynamically set the
+ * primary conninfo in accordance.
+ *
+ * Interacting with systemd, it is also able to tirgger a dumb and fearless
+ * switchover, without any safety belt.
  *
  * Base code inspired by src/test/modules/worker_spi/worker_spi.c
  * Documentation: https://www.postgresql.org/docs/current/bgworker.html
@@ -28,6 +31,9 @@
 #include "utils/ps_status.h"		// rename process
 #include "access/xlog.h"			// for RecoveryInProgress()
 #include "storage/fd.h"				// for BasicOpenFile
+#include "executor/spi.h"			// for SPI funcs
+#include "utils/snapmgr.h"			// for xact control
+#include "pgstat.h"					// for pgstat_* funcs
 
 #define CPG_GROUP_NAME "pgsql_group"
 /* Name of the file where the module write the primary_conninfo setting */
@@ -64,6 +70,8 @@ static cpg_handle_t gh;
 static struct cpg_name cpg_group;
 /* flag shutdown set by signal handlers */
 static volatile sig_atomic_t pending_shutdown = false;
+/* flag switchover set by signal handlers */
+static volatile sig_atomic_t pending_switchover = false;
 
 /*
  * Functions
@@ -138,6 +146,17 @@ cpg_sigterm(SIGNAL_ARGS)
 }
 
 /*
+ * Signal handler for SIGUSR2, switchover.
+ */
+static void
+cpg_sigusr2(SIGNAL_ARGS)
+{
+	elog(LOG, "[cpg] Signaled to switchover");
+	pending_switchover = true;
+	SetLatch(MyLatch);
+}
+
+/*
  * Send the given message "data" of length "len" using the group handle "gh"
  */
 static void
@@ -194,6 +213,132 @@ cpg_shutdown()
 
 	/* Shutdown */
 	exit(0);
+}
+
+/*
+ * Trigger a smart promote on a remote node and shutdown gracefuly.
+ */
+static void
+cpg_switchover()
+{
+	int i, fd;
+	uint32_t candidate;
+	char msg[128];
+
+	/* Corosync vars */
+	struct cpg_address addresses[2];
+	cs_error_t rc;
+	int num_addresses;
+
+	/* Reset switchover signal */
+	pending_switchover = false;
+
+	if (in_recovery)
+	{
+		elog(LOG, "[cpg] Ignoring switchover signal: already a standby.");
+		return;
+	}
+
+	/* Get at least two group members to find a candidate not being ourself */
+	num_addresses = 2;
+	rc = cpg_membership_get(gh, &cpg_group, addresses, &num_addresses);
+	if (rc != CS_OK)
+		elog(FATAL, "[cpg] could not get the group members: %d", rc);
+
+	for (i = 0; i < 2; i++)
+	{
+		if (addresses[i].nodeid != MyNodeID)
+		{
+			candidate = addresses[i].nodeid;
+			break;
+		}
+	}
+
+	elog(LOG, "[cpg] Initiating switchover to node %u", candidate);
+
+	snprintf(msg, 128, "promote=%u", candidate);
+	send_msg(gh, msg, strlen(msg) + 1);
+
+	/* Create standby.signal file */
+	fd = BasicOpenFile(STANDBY_SIGNAL_FILE, O_CREAT | O_RDWR | O_TRUNC);
+	close(fd);
+
+	/* Shutdown ourself */
+	kill(PostmasterPid, SIGTERM);
+}
+
+/*
+ * Smart self-promotion, waiting for replication to finish first.
+ */
+static void
+cpg_promote()
+{
+	int rc;
+	int is_streaming;
+	bool isnull;
+	char *promote_query = "SELECT pg_promote()";
+	char *wal_receiver_query = "SELECT count(*) "
+							   "FROM pg_catalog.pg_stat_wal_receiver";
+
+	elog(DEBUG1, "[cpg] Received a promotion signal");
+
+	/* We must set the current timestamp before creating a xact so it is
+	 * timestamped and its first query as well */
+	SetCurrentStatementStartTimestamp();
+
+	/* Start a xact, this must be done before any SPI call:
+	 * https://www.postgresql.org/message-id/1003166.1627657587%40sss.pgh.pa.us
+	 */
+	StartTransactionCommand();
+
+	/* Setup an SPI environment, its memory context, globals init, etc. */
+	SPI_connect();
+
+	/* Required to have a MVCC snapshot */
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	/* Waiting for the replication to end */
+	do
+	{
+		elog(DEBUG1, "[cpg] Waiting for streaming to finish…");
+
+		/* pausing 1/10th of sec between each check */
+		WaitLatch(NULL, WL_EXIT_ON_PM_DEATH | WL_TIMEOUT, 100,
+				  PG_WAIT_EXTENSION);
+
+		/* Set the current timestamp for next query start time */
+		SetCurrentStatementStartTimestamp();
+		/* Report our activity */
+		pgstat_report_activity(STATE_RUNNING, wal_receiver_query);
+
+		rc = SPI_execute(wal_receiver_query, true, 1);
+		if (rc != SPI_OK_SELECT || SPI_processed != 1)
+			elog(FATAL, "Could not query the wal receiver state: %d", rc);
+
+		is_streaming = DatumGetInt64(SPI_getbinval(SPI_tuptable->vals[0],
+									 SPI_tuptable->tupdesc,
+									 1, &isnull));
+
+		/* Report our inactivity */
+		pgstat_report_activity(STATE_IDLE, NULL);
+	}
+	while(is_streaming > 0);
+
+	elog(DEBUG1, "[cpg] Replication done");
+
+	SetCurrentStatementStartTimestamp();
+	pgstat_report_activity(STATE_RUNNING, promote_query);
+	rc = SPI_execute(promote_query, true, 0);
+	if (rc != SPI_OK_SELECT)
+		elog(FATAL, "Promotion query failed: %d", rc);
+	pgstat_report_activity(STATE_IDLE, NULL);
+
+	SPI_finish();
+	PopActiveSnapshot();
+	CommitTransactionCommand();
+
+	/* Report the bgwork activity stat (mainly functions call) */
+	pgstat_report_stat(false);
 }
 
 /*
@@ -285,6 +430,7 @@ cs_message_cb(cpg_handle_t gh, const struct cpg_name *groupName,
 			  uint32_t nodeid, uint32_t pid, void *msg, size_t msg_len)
 {
 	char nodename[HOST_NAME_MAX];
+	uint32_t to_promote;
 
 	if (nodeid == MyNodeID && pid == MyProcPid)
 		elog(DEBUG1, "[cpg] ignoring own message");
@@ -333,6 +479,12 @@ cs_message_cb(cpg_handle_t gh, const struct cpg_name *groupName,
 			strncpy(current_primary, nodename, HOST_NAME_MAX);
 			update_ps_display();
 		}
+		/* Receiving a promotion instruction */
+		else if (sscanf((const char *) msg, "promote=%u", &to_promote) == 1)
+		{
+			if (to_promote == MyNodeID)
+				cpg_promote();
+		}
 	}
 }
 
@@ -361,6 +513,8 @@ cpg_main(Datum main_arg)
 	 */
 	/* Leave gracefully on shutdown */
 	pqsignal(SIGTERM, cpg_sigterm);
+	/* Install signal handler to leave trigger a switchover */
+	pqsignal(SIGUSR2, cpg_sigusr2);
 	/* Core facility to handle config reload */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
 
@@ -453,6 +607,9 @@ cpg_main(Datum main_arg)
 	if (rc != CS_OK)
 		elog(FATAL, "[cpg] failed to get the CPG file descriptor: %d", rc);
 
+	/* Connect to database */
+	BackgroundWorkerInitializeConnection("postgres", NULL, 0);
+
 	/* Event loop */
 	for (;;)
 	{
@@ -495,6 +652,9 @@ cpg_main(Datum main_arg)
 		if (pending_shutdown)
 			cpg_shutdown();
 
+		if (pending_switchover)
+			cpg_switchover();
+
 		/* Wait for an event or timeout */
 		WaitLatchOrSocket(MyLatch,
 						  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH |
@@ -533,10 +693,9 @@ _PG_init(void)
 	/* Memory init */
 	memset(&worker, 0, sizeof(worker));
 
-	/* The bgw _currently_ don't need shmem access neither database connection.
-	 * However, documentation states that BGWORKER_SHMEM_ACCESS is always
-	 * required. If omitted, the bgw is fully ignored by postmaster. */
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	/* We need shmem access and database connection */
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |
+					   BGWORKER_BACKEND_DATABASE_CONNECTION;
 
 	/* Start the bgworker as soon as a consistant state has been reached */
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
