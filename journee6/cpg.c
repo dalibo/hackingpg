@@ -19,6 +19,7 @@
 
 #include <limits.h>					// INT_MAX
 #include <corosync/cpg.h>			// corosync funcs
+#include <systemd/sd-bus.h>			// DBus calls
 
 #include "postgres.h"				// definitions useful for PostgreSQL procs
 #include "postmaster/bgworker.h"	// for a bgworker
@@ -54,6 +55,10 @@ PGDLLEXPORT void cpg_main(Datum main_arg);
 
 /* Maximum interval between bgworker wakeups */
 static int interval;
+/* The Systemd service name to restart during switchover */
+static char *service;
+/* Is it a user service ? */
+static bool is_user_service;
 /* Remember recovery state */
 static bool in_recovery;
 /* Remember the number of known members */
@@ -217,6 +222,9 @@ cpg_shutdown()
 
 /*
  * Trigger a smart promote on a remote node and shutdown gracefuly.
+ *
+ * Documentation about DBus and code example:
+ *   https://0pointer.net/blog/the-new-sd-bus-api-of-systemd.html
  */
 static void
 cpg_switchover()
@@ -229,6 +237,13 @@ cpg_switchover()
 	struct cpg_address addresses[2];
 	cs_error_t rc;
 	int num_addresses;
+
+	/* Dbus related vars */
+	int r;
+	const char *path;
+	sd_bus_error error = SD_BUS_ERROR_NULL;
+	sd_bus_message *m = NULL;
+	sd_bus *bus = NULL;
 
 	/* Reset switchover signal */
 	pending_switchover = false;
@@ -258,13 +273,65 @@ cpg_switchover()
 
 	snprintf(msg, 128, "promote=%u", candidate);
 	send_msg(gh, msg, strlen(msg) + 1);
+	*msg = '\0';
 
 	/* Create standby.signal file */
 	fd = BasicOpenFile(STANDBY_SIGNAL_FILE, O_CREAT | O_RDWR | O_TRUNC);
 	close(fd);
 
-	/* Shutdown ourself */
-	kill(PostmasterPid, SIGTERM);
+	/*
+	 * Ask Systemd (over DBus) to restart ourself.
+	 */
+	/* Connect to the system or user bus */
+	if (is_user_service)
+		r = sd_bus_open_user(&bus);
+	else
+		/* This demo environment install a polkit rule allowing user postgres
+		 * to manage its own service through the system service manager. See
+		 * the `provision/cpg.yml` ansible playbook for a sample file */
+		r = sd_bus_open_system(&bus);
+	if (r < 0)
+	{
+		snprintf(msg, 128, "[cpg] Failed to connect to system bus: %s",
+				 strerror(-r));
+		goto finish;
+	}
+
+	/* Issue the method call and store the response message in m */
+	r = sd_bus_call_method(bus,
+						   "org.freedesktop.systemd1",	/* service to contact */
+						   "/org/freedesktop/systemd1",	/* object path */
+						   "org.freedesktop.systemd1.Manager",	/* interface name */
+						   "RestartUnit",		/* method name */
+						   &error,				/* object to return error in */
+						   &m,					/* return message on success */
+						   "ss",				/* input signature */
+						   service,				/* first argument */
+						   "replace");			/* second argument */
+	if (r < 0)
+	{
+		snprintf(msg, 128, "[cpg] Failed to issue method call: %s\n",
+				 error.message);
+		goto finish;
+	}
+
+	/* Parse the response message */
+	r = sd_bus_message_read(m, "o", &path);
+	if (r < 0)
+	{
+		snprintf(msg, 128, "[cpg] Failed to parse response message: %s\n",
+				 strerror(-r));
+		goto finish;
+	}
+
+	elog(LOG, "[cpg] Queued service job as %s.\n", path);
+
+finish:
+	sd_bus_error_free(&error);
+	sd_bus_message_unref(m);
+	sd_bus_unref(bus);
+	if (*msg != '\0')
+		elog(FATAL, "[cpg] Failed to connect to system bus: %s", strerror(-r));
 }
 
 /*
@@ -539,6 +606,32 @@ cpg_main(Datum main_arg)
 							NULL,			// check hook
 							NULL,			// assign hook
 							NULL);			// show hook
+
+	/* systemd service name */
+	DefineCustomStringVariable("cpg.service",
+							   "The systemd service name to manage during "
+							   "failover",
+							   NULL,
+							   &service,
+							   "postgresql.service",
+							   PGC_SIGHUP,	// context
+							   0,			// flags
+							   NULL,		// check hook
+							   NULL,		// assign hook
+							   NULL);		// show hook
+
+	/* Either connect to systemd through user bus or system bus */
+	DefineCustomBoolVariable("cpg.is_user_service",
+							 "The service is handled by the systemd service "
+							 "manager of the user",
+							 NULL,
+							 &is_user_service,
+							 false,
+							 PGC_SIGHUP,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
 
 	/*
 	 * Lock namespace "cpg". Forbid creating any other GUC after here. Useful
