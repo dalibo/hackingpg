@@ -86,6 +86,31 @@ cpg_sigterm(SIGNAL_ARGS)
 }
 
 /*
+ * Send the given message "data" of length "len" using the group handle "gh"
+ */
+static void
+send_msg(cpg_handle_t gh, char *data, int len)
+{
+	struct iovec iovec;
+	int rc;
+
+	/* Setup the structure holding the message */
+	iovec.iov_base = (void *)data;
+	iovec.iov_len = len;
+
+	/* Send the message */
+	rc = cpg_mcast_joined(gh, CPG_TYPE_FIFO, &iovec, 1);
+	if (rc == CS_OK)
+		/*
+		 * For this demo, we expect message to be text only, so let's log it
+		 * for better observability.
+		 */
+		elog(DEBUG1, "[cpg] message sent: %s", data);
+	else
+		elog(FATAL, "[cpg] could not send message: %d", rc);
+}
+
+/*
  * Corosync callbacks. See cpg_initialize(3) for reference.
  *
  */
@@ -120,6 +145,25 @@ cs_config_cb(cpg_handle_t gh,
 	elog(LOG, "[cpg] %lu join, %lu left, procs in group now: %s",
 		 joined_list_entries, left_list_entries, msg.data+2);
 
+	/* Loop on newcomers to the group */
+	for (i = 0; i < joined_list_entries; i++)
+	{
+		if (joined_list[i].nodeid == MyNodeID
+			&& (pid_t)joined_list[i].pid == MyProcPid)
+		{
+			/* The local node is now confirmed in the group */
+			char hostname[HOST_NAME_MAX];
+			resetStringInfo(&msg);
+
+			gethostname(hostname, HOST_NAME_MAX);
+
+			appendStringInfo(&msg, "Hi, I'm %s!", hostname);
+
+			/* Introduce the local node to other ones… */
+			send_msg(gh, msg.data, msg.len + 1);
+		}
+	}
+
 	pfree(msg.data);
 
 	/* Did I left the group ? */
@@ -130,6 +174,20 @@ cs_config_cb(cpg_handle_t gh,
 		/* …then quit */
 		elog(FATAL, "[cpg] I left the closed process group!");
 	}
+}
+
+/*
+ * Implementation of the CPG message callback.
+ * Called when a message is received, even our own ones!
+ */
+static void
+cs_message_cb(cpg_handle_t gh, const struct cpg_name *groupName,
+			  uint32_t nodeid, uint32_t pid, void *msg, size_t msg_len)
+{
+	if (nodeid == MyNodeID && pid == MyProcPid)
+		elog(DEBUG1, "[cpg] ignoring own message");
+	else
+		elog(LOG, "[cpg] (%d/%d): «%s»", nodeid, pid, (const char *) msg);
 }
 
 /*
@@ -211,7 +269,7 @@ cpg_main(Datum main_arg)
 
 	/* Corosync callbacks setup */
 	model_data.flags = CPG_MODEL_V1_DELIVER_INITIAL_TOTEM_CONF;
-	model_data.cpg_deliver_fn = NULL; /* TODO */
+	model_data.cpg_deliver_fn = cs_message_cb;
 	model_data.cpg_confchg_fn = cs_config_cb;
 	/* We choose to not implement the totem callback as it is not relevent */
 	model_data.cpg_totem_confchg_fn = NULL;
@@ -264,7 +322,11 @@ cpg_main(Datum main_arg)
 
 		if (RecoveryInProgress() != in_recovery)
 		{
-			elog(LOG, "[cpg] I've been promoted!");
+			char *msg = "[cpg] I've been promoted!";
+
+			elog(LOG, "%s", msg);
+			send_msg(gh, msg, strlen(msg) + 1);
+
 			in_recovery = RecoveryInProgress();
 			update_ps_display();
 		}
