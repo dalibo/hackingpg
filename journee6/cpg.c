@@ -47,6 +47,10 @@ PGDLLEXPORT void cpg_main(Datum main_arg);
 static int interval;
 /* Remember recovery state */
 static bool in_recovery;
+/* Remember the number of known members */
+static uint32_t members;
+/* Local node id as set in corosync config */
+static uint32_t MyNodeID;
 
 /*
  * Functions
@@ -61,9 +65,9 @@ update_ps_display()
 	char ps_display[128];
 
 	if (in_recovery)
-		snprintf(ps_display, 128, "Hello!");
+		snprintf(ps_display, 128, "[%u] Hello!", members);
 	else
-		snprintf(ps_display, 128, "I'm the primary!");
+		snprintf(ps_display, 128, "[%u] I'm the primary!", members);
 
 	set_ps_display(ps_display);
 }
@@ -82,6 +86,53 @@ cpg_sigterm(SIGNAL_ARGS)
 }
 
 /*
+ * Corosync callbacks. See cpg_initialize(3) for reference.
+ *
+ */
+
+/*
+ * Implementation of the CPG config callback. Called when members join or
+ * leave the group.
+ */
+static void
+cs_config_cb(cpg_handle_t gh,
+			 const struct cpg_name *groupName,
+			 const struct cpg_address *member_list,
+			 size_t member_list_entries,
+			 const struct cpg_address *left_list,
+			 size_t left_list_entries,
+			 const struct cpg_address *joined_list,
+			 size_t joined_list_entries)
+{
+	unsigned int i;
+	StringInfoData msg;
+
+	/* Update number of members in the process title */
+	members = member_list_entries;
+	update_ps_display();
+
+	/* Sum up current members */
+	initStringInfo(&msg);
+	for (i = 0; i < member_list_entries; i++)
+		appendStringInfo(&msg, ", %d/%d", member_list[i].nodeid,
+						 member_list[i].pid);
+
+	elog(LOG, "[cpg] %lu join, %lu left, procs in group now: %s",
+		 joined_list_entries, left_list_entries, msg.data+2);
+
+	pfree(msg.data);
+
+	/* Did I left the group ? */
+	if (left_list_entries
+		&& (pid_t)left_list[0].pid == MyProcPid
+		&& left_list[0].nodeid == MyNodeID)
+	{
+		/* …then quit */
+		elog(FATAL, "[cpg] I left the closed process group!");
+	}
+}
+
+/*
  * The bgworker main function.
  *
  * This is called from the bgworker backend freshly forked and setup by
@@ -97,6 +148,7 @@ cpg_main(Datum main_arg)
 	struct cpg_name cpg_group;
 	/* Structure holding the group handle */
 	cpg_handle_t gh;
+	int32_t cpg_fd;
 
 	/*
 	 * By default, signals are blocked when the background worker starts.
@@ -160,7 +212,7 @@ cpg_main(Datum main_arg)
 	/* Corosync callbacks setup */
 	model_data.flags = CPG_MODEL_V1_DELIVER_INITIAL_TOTEM_CONF;
 	model_data.cpg_deliver_fn = NULL; /* TODO */
-	model_data.cpg_confchg_fn = NULL; /* TODO */
+	model_data.cpg_confchg_fn = cs_config_cb;
 	/* We choose to not implement the totem callback as it is not relevent */
 	model_data.cpg_totem_confchg_fn = NULL;
 
@@ -183,10 +235,32 @@ cpg_main(Datum main_arg)
 	else
 		elog(FATAL, "[cpg] could not join the close process group: %d", rc);
 
+	/* Get the local node id. This is needed to identify our own messages */
+	rc = cpg_local_get(gh, &MyNodeID);
+	if (rc != CS_OK)
+		elog(FATAL, "[cpg] failed to get local nodeid: %d", rc);
+
+	/* Get the file descriptor used for the group communication. We watch it in
+	 * the event loop to detect incoming events. */
+	rc = cpg_fd_get(gh, &cpg_fd);
+	if (rc != CS_OK)
+		elog(FATAL, "[cpg] failed to get the CPG file descriptor: %d", rc);
+
 	/* Event loop */
 	for (;;)
 	{
 		CHECK_FOR_INTERRUPTS();
+
+		/* Check if an event is waiting to be processed, without blocking the
+		 * loop */
+		rc = cpg_dispatch(gh, CS_DISPATCH_ONE_NONBLOCKING);
+		if (rc == CS_OK)
+			elog(DEBUG1, "[cpg] dispatched one event");
+		else if (rc != CS_ERR_TRY_AGAIN)
+			/* Using CS_DISPATCH_ONE_NONBLOCKING, cpg_dispatch returns
+			 * CS_ERR_TRY_AGAIN when no event are waiting to be processed. This
+			 * is not a failure to catch */
+			elog(FATAL, "[cpg] dispatching callback failed: %d", rc);
 
 		if (RecoveryInProgress() != in_recovery)
 		{
@@ -202,10 +276,12 @@ cpg_main(Datum main_arg)
 		HandleMainLoopInterrupts();
 
 		/* Wait for an event or timeout */
-		WaitLatch(MyLatch,
-				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-				  interval*1000, /* convert to milliseconds */
-				  PG_WAIT_EXTENSION);
+		WaitLatchOrSocket(MyLatch,
+						  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH |
+						  WL_SOCKET_READABLE,
+						  cpg_fd,
+						  interval*1000, /* convert to milliseconds */
+						  PG_WAIT_EXTENSION);
 		ResetLatch(MyLatch);
 	}
 
