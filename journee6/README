@@ -1,0 +1,60 @@
+# pré-requis
+
+Cette journée nécessite un cluster PostgreSQL et un cluster Corosync
+pré-configurés sur les même machines. Un fichier `Vagrantfile` est disponible
+dans le dépôt pour créer trois machines, installer et configurer l'ensemble.
+
+La seule commande à lancer est :
+
+```bash
+vagrant up
+```
+
+Cette dernière crée les machines et lance un playbook ansible.
+
+Une fois le playbook ansible terminé, vous devriez avoir une instance primaire
+sur la machine `s1`, et un standby sur `s2` et `s3`. Les standby ne sont
+cependant pas encore en mesure de se connecter au primaire et attende une
+configuration adéquate.
+
+Coté corosync, vous devriez observer un cluster avec les trois nœuds connectés
+ensemble :
+
+```console
+# corosync-cfgtool -s
+Local node ID 1, transport knet
+LINK ID 0 udp
+	addr	= 192.168.121.223
+	status:
+		nodeid:          1:	localhost
+		nodeid:          2:	connected
+		nodeid:          3:	connected
+```
+
+
+# Cycle de développement
+
+L'architecture obtenue par défaut n'installe pas le module CPG, c'est à vous de
+le développer !
+
+Au cours des différentes étapes, afin de tester votre module, un playbook
+ansible permet d'installer les paquets nécessaires, compiler le module,
+l'installer, le configurer au sein du cluster et redémarrer les instances :
+
+```bash
+vagrant provision --provision-with=cpg
+```
+
+Pour éviter certaines phases inutiles lors des itérations suivantes, il est
+aussi possible d'utiliser :
+
+```bash
+vagrant --ansible-tags=cpg_build provision --provision-with=cpg
+```
+
+Les différentes étapes documentées dans le dépôts peuvent être listées avec
+un court descriptif grâce à la commande suivante :
+
+```bash
+git tag -n j6e*
+```

@@ -1,0 +1,50 @@
+---
+- name: "Generate SSH RSA keys for {{ system_user }}"
+  become: true
+  become_user: "{{ system_user }}"
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -f
+      - "~{{ system_user }}/.ssh/id_rsa"
+      - -P
+      - ""
+    creates: "~{{ system_user }}/.ssh/id_rsa.pub"
+
+- name: "Read ssh public keys for {{ system_user }}"
+  become: true
+  ansible.builtin.slurp:
+    src: "~{{ system_user }}/.ssh/id_rsa.pub"
+  register: rsa_pub_keys
+
+- name: "Add user public key to the authorized keys"
+  become: true
+  become_user: "{{ system_user }}"
+  ansible.builtin.blockinfile:
+    dest: "~{{ system_user }}/.ssh/authorized_keys"
+    marker: "# {mark} PUBLIC KEY FOR {{ item }}"
+    create: true
+    mode: 0600
+    block: |
+      {{ hostvars[item].rsa_pub_keys.content | b64decode }}
+  loop: "{{ groups['all'] }}"
+
+- name: "Read host key for {{ ansible_nodename }}"
+  ansible.builtin.command:
+    argv:
+      - ssh-keyscan
+      - "{{ ansible_nodename }}"
+  register: known_host
+  changed_when: false
+  failed_when: false
+
+- name: "Add host key to known_hosts file"
+  become: true
+  become_user: "{{ system_user }}"
+  ansible.builtin.blockinfile:
+    dest: "~{{ system_user }}/.ssh/known_hosts"
+    marker: "# {mark} known host {{ item }}"
+    create: true
+    mode: 0600
+    block: "{{ hostvars[item].known_host.stdout_lines | sort | join('\n') }}"
+  loop: "{{ groups['all'] }}"

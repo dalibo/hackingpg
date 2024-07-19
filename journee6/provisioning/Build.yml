@@ -1,0 +1,240 @@
+---
+- hosts: all
+  vars_files: commons.yml
+  tasks:
+
+    # - name: Update system
+    #   become: true
+    #   ansible.builtin.package:
+    #     name: "*"
+    #     state: latest
+
+    - name: Setup /etc/hosts
+      become: true
+      ansible.builtin.blockinfile:
+        marker: "# {mark} ANSIBLE MANAGED BLOCK for {{ item.key }}"
+        dest: /etc/hosts
+        block: |
+          {{ item.value }} {{ item.key }}.priv
+      loop: "{{ cs_hosts | dict2items }}"
+
+    # FIREWALLING
+
+    - name: Get firewalld status
+      tags: fw
+      ansible.builtin.systemd:
+        name: firewalld.service
+      register: fwd
+
+    - name: Allow Corosync and PostgreSQL traffic through firewall
+      tags: fw
+      become: true
+      when:
+        - fwd.status.UnitFileState == 'enabled'
+        - fwd.status.ActiveState == 'active'
+      ansible.posix.firewalld:
+        service: "{{ item }}"
+        state: enabled
+        permanent: yes
+        immediate: yes
+      loop:
+        - high-availability
+        - postgresql
+
+    # POSTGRESQL INSTALL
+
+    - name: Install PGDG repo
+      tags: pgsql
+      become: true
+      ansible.builtin.yum:
+        name: "https://download.postgresql.org/pub/repos/yum/reporpms/EL-{{ ansible_distribution_major_version }}-x86_64/pgdg-redhat-repo-latest.noarch.rpm"
+        disable_gpg_check: true
+        state: latest
+
+    - name: Disable default postgres module
+      tags: pgsql
+      become: true
+      ansible.builtin.ini_file:
+        path: /etc/dnf/modules.d/postgresql.module
+        section: postgresql
+        option: "{{ item.option }}"
+        value: "{{ item.value }}"
+        no_extra_spaces: yes
+      with_items:
+        - { option: 'state', value: 'disabled' }
+        - { option: 'stream', value: '' }
+        - { option: 'profiles', value: '' }
+      when:
+        - ansible_os_family == 'RedHat'
+        - ansible_distribution_major_version | int == 8
+
+    - name: Install PostgreSQL packages
+      tags: pgsql
+      become: true
+      ansible.builtin.yum:
+        state: latest
+        enablerepo:
+          - "pgdg{{ pgver }}"
+        name:
+          - "postgresql{{ pgver }}"
+          - "postgresql{{ pgver }}-server"
+          - "postgresql{{ pgver }}-contrib"
+
+    # COROSYNC SETUP
+
+    - name: Include distribution HA repository
+      tags: corosync
+      ansible.builtin.include_tasks:
+        file: "includes/{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
+
+    - name: Install Corosync
+      tags: corosync
+      become: true
+      ansible.builtin.package:
+        name: corosync
+        state: latest
+
+    - name: Setup Corosync
+      tags: corosync
+      become: true
+      ansible.builtin.template:
+        src: corosync.conf.j2
+        dest: /etc/corosync/corosync.conf
+        owner: root
+        group: root
+        mode: 0600
+
+    - name: Allow postgres to access corosync facilities
+      tags: corosync
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/corosync/uidgid.d/postgres
+        content: |
+          uidgid {
+              uid: postgres
+              gid: postgres
+          }
+        owner: root
+        group: root
+        mode: 0600
+
+    - name: Enable and start Corosync service
+      tags: corosync
+      become: true
+      ansible.builtin.systemd_service:
+        name: corosync.service
+        enabled: true
+        state: started
+
+    # POSTGRESQL
+
+    - name: Create PostgreSQL instance and service
+      tags: pgsql
+      become: true
+      ansible.builtin.command:
+        argv:
+          - "{{ pgbin }}/postgresql-{{ pgver }}-setup"
+          - initdb
+        creates: "{{ pgdata }}/PG_VERSION"
+
+    # POSTGRESQL PRIMARY
+
+    - name: Build primary instance
+      tags: pgsql
+      when: inventory_hostname in groups['primary']
+      block:
+      - name: Setup primary postgresql.conf
+        become: true
+        ansible.builtin.blockinfile:
+          marker: "# {mark} ANSIBLE MANAGED BLOCK"
+          dest: "{{ pgdata }}/postgresql.conf"
+          block: |
+            listen_addresses = '*'
+            log_min_messages = debug1
+            wal_keep_size = 256MB
+
+      - name: Setup primary pg_hba.conf
+        become: true
+        ansible.builtin.blockinfile:
+          dest: "{{ pgdata }}/pg_hba.conf"
+          block: |
+            host replication all 0.0.0.0/0 trust
+
+      - name: Enable and start PostgreSQL service
+        become: true
+        ansible.builtin.systemd_service:
+          name: "{{ pgsql_service_name }}"
+          enabled: true
+          state: started
+
+    # POSTGRESQL SECONDARIES
+
+    - name: Build standby instances
+      tags: pgsql
+      when: inventory_hostname in groups['standbies']
+      block:
+      - name: Get stats of a file
+        become: true
+        ansible.builtin.stat:
+          path: "{{ pgdata }}/standby.signal"
+        register: signal_file
+
+      - name: Build standby
+        when: not signal_file.stat.exists
+        block:
+          - name: Remove old pgdata
+            become: true
+            ansible.builtin.file:
+              path: "{{ pgdata }}"
+              state: absent
+
+          - name: Enable and start PostgreSQL standby service
+            become: true
+            ansible.builtin.systemd_service:
+              name: "{{ pgsql_service_name }}"
+              enabled: true
+              state: stopped
+
+          - name: Create PostgreSQL standby
+            # this triggers a useless warning about ~postgres/.ansible permissions
+            become: true
+            become_user: postgres
+            ansible.builtin.command:
+              argv:
+                - pg_basebackup
+                - -h
+                - s1.priv
+                - -U
+                - postgres
+                - -D
+                - "{{ pgdata }}"
+                - -X
+                - stream
+              creates: "{{ pgdata }}/PG_VERSION"
+
+          - name: Set standby.signal on standby
+            become: true
+            become_user: postgres
+            file:
+              path: "{{ pgdata }}/standby.signal"
+              state: touch
+
+      - name: Enable and start PostgreSQL standby service
+        become: true
+        ansible.builtin.systemd_service:
+          name: "{{ pgsql_service_name }}"
+          enabled: true
+          state: started
+
+    # SSH setup
+
+    - name: SSH key authent on all nodes
+      tags: ssh
+      ansible.builtin.include_role:
+        name: ssh_pubkey_auth
+      loop:
+        - vagrant
+        - root
+        - postgres
+      loop_control:
+        loop_var: system_user

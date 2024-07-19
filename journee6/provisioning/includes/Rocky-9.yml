@@ -1,0 +1,11 @@
+---
+- name: Enable ha repo on Rocky 9
+  tags: corosync
+  become: true
+  ansible.builtin.ini_file:
+    path: /etc/yum.repos.d/rocky-addons.repo
+    section: highavailability
+    option: enabled
+    value: 1
+    no_extra_spaces: yes
+
