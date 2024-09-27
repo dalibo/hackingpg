@@ -1,0 +1,96 @@
+version: 2
+charset: UTF-8
+
+dn: ou=people,dc=bridoulou,dc=fr
+changetype: add
+objectclass: organizationalUnit
+objectclass: top
+ou: people
+
+# a* for alter
+# Alter has no luck, his name is a SQL literal ^^
+dn: cn=alter,ou=people,dc=bridoulou,dc=fr
+changetype: add
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: alter
+sn: alter
+mail: alter@ldap2pg.docker
+
+
+# c* for create
+
+dn: cn=corinne,ou=people,dc=bridoulou,dc=fr
+changetype: add
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: corinne
+sn: corinne
+mail: corinne@ldap2pg.docker
+
+dn: cn=charles,ou=people,dc=bridoulou,dc=fr
+changetype: add
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: charles
+sn: charles
+mail: charles@ldap2pg.docker
+
+dn: cn=clothilde,ou=people,dc=bridoulou,dc=fr
+changetype: add
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: clothilde
+sn: clothilde
+mail: clothilde@ldap2pg.docker
+
+# For blacklist.
+dn: cn=postgres,ou=people,dc=bridoulou,dc=fr
+changetype: add
+objectclass: inetOrgPerson
+objectclass: organizationalPerson
+objectclass: person
+objectclass: top
+cn: postgres
+sn: postgres
+mail: postgres@ldap2pg.docker
+
+dn: ou=groups,dc=bridoulou,dc=fr
+changetype: add
+objectclass: organizationalUnit
+objectclass: top
+ou: groups
+
+dn: cn=readers,ou=groups,dc=bridoulou,dc=fr
+changetype: add
+objectClass: groupOfNames
+objectClass: top
+cn: readers
+member: cn=alain,ou=people,dc=bridoulou,dc=fr
+member: cn=corinne,ou=people,dc=bridoulou,dc=fr
+# For blacklist
+member: cn=postgres,ou=people,dc=bridoulou,dc=fr
+
+dn: cn=writers,ou=groups,dc=bridoulou,dc=fr
+changetype: add
+objectClass: groupOfNames
+objectClass: top
+cn: writers
+member:: Y249YWxpesOpZSxvdT1wZW9wbGUsZGM9bGRhcCxkYz1sZGFwMnBnLGRjPWRvY2tlcgo=
+member: cn=charles,ou=people,dc=bridoulou,dc=fr
+
+dn: cn=owners,ou=groups,dc=bridoulou,dc=fr
+changetype: add
+objectClass: groupOfNames
+objectClass: top
+cn: owners
+member: cn=alter,ou=people,dc=bridoulou,dc=fr
+member: cn=clothilde,ou=people,dc=bridoulou,dc=fr
